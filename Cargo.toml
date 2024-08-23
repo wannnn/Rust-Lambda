@@ -1,0 +1,26 @@
+[package]
+name = "rust_lambda"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lambda_runtime = "0.13.0"
+lambda_http = "0.13.0"
+mockall = "0.13.0"
+serde = "1.0.136"
+tokio = { version = "1", features = ["full"] }
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "fmt",
+] }
+aws-config = "1.5.5"
+aws-sdk-dynamodb = "1.42.0"
+uuid = { version = "1.2", features = ["v4"] }
+
+[[bin]]
+name = "create_product"
+path = "src/bin/create_product.rs"
+
+[[bin]]
+name = "get_product"
+path = "src/bin/get_product.rs"

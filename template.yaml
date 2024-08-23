@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Sample SAM Template for hello-rust-lambda
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures: ["arm64"]
+    Handler: bootstrap    # Do not change, as this is the default executable name produced by Cargo Lambda
+    Runtime: provided.al2023
+
+Resources:
+  CreateProductFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Metadata:
+      BuildMethod: rust-cargolambda # More info about Cargo Lambda: https://github.com/cargo-lambda/cargo-lambda
+    Properties:
+      CodeUri: target/lambda/create_product/
+      Events:
+        CreateProduct:
+          Type: Api
+          Properties:
+            Path: /product
+            Method: post
+      Policies: 
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProductTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ProductTable
+  
+  GetProductFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Metadata:
+      BuildMethod: rust-cargolambda # More info about Cargo Lambda: https://github.com/cargo-lambda/cargo-lambda
+    Properties:
+      CodeUri: target/lambda/get_product/
+      Events:
+        GetProduct:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /product/{id}
+            Method: get
+      Policies: 
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProductTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ProductTable
+  
+  ProductTable: 
+    Type: AWS::Serverless::SimpleTable
+    Properties: 
+      TableName: ProductTable
+      PrimaryKey: 
+        Name: id
+        Type: String
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  ApiUrl:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/"
+  GetProductFunction:
+    Description: "GetProduct Lambda Function ARN"
+    Value: !GetAtt GetProductFunction.Arn
+  GetProductFunctionIamRole:
+    Description: "Implicit IAM Role created for GetProduct function"
+    Value: !GetAtt GetProductFunctionRole.Arn

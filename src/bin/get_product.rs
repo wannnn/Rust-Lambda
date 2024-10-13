@@ -1,97 +1,28 @@
-use std::collections::HashMap;
-
 use aws_config::BehaviorVersion;
-use aws_sdk_dynamodb::{types::AttributeValue, Client};
+use aws_sdk_dynamodb::Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
-use rust_lambda::{utils::setup_tracing, Product};
+use rust_lambda::{
+    model::{GetProductBody, GetProductRequest, GetProductResponse},
+    repo::DynamoDbClient,
+    utils::setup_tracing,
+};
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Deserialize)]
-struct GetProductRequest {
-    path_parameters: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum GetProductBody {
-    String(String),
-    Product(Product),
-}
-
-#[derive(Debug, Serialize)]
-struct GetProductResponse {
-    status_code: i32,
-    body: GetProductBody,
-}
-
-/// There are some code example in the following URLs:
-/// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
-/// - https://github.com/aws-samples/serverless-rust-demo/
-async fn get_product_handler(
-    client: &Client,
-    table_name: &str,
+async fn get_product<T: DynamoDbClient>(
+    client: &T,
     event: LambdaEvent<GetProductRequest>,
 ) -> Result<GetProductResponse, Error> {
+    // Extract path parameter from request
     let id = match event.payload.path_parameters {
         Some(params) => params.get("id").cloned().unwrap_or_default(),
-        None => "".to_string(),
+        None => {
+            return Ok(GetProductResponse {
+                status_code: 400,
+                body: GetProductBody::String("id is required".to_string()),
+            });
+        }
     };
 
-    // Create a GetItem request
-    let response = client
-        .get_item()
-        .table_name(table_name)
-        .key("id", AttributeValue::S(id.clone()))
-        .send()
-        .await;
-
-    match response {
-        Ok(res) => {
-            if let Some(item) = res.item {
-                // Deserialize the item into a Product struct
-                let product = Product {
-                    id: item
-                        .get("id")
-                        .and_then(|v| v.as_s().ok())
-                        .unwrap()
-                        .to_string(),
-                    name: item
-                        .get("name")
-                        .and_then(|v| v.as_s().ok())
-                        .unwrap()
-                        .to_string(),
-                    description: item
-                        .get("description")
-                        .and_then(|v| v.as_s().ok())
-                        .unwrap()
-                        .to_string(),
-                    price: item
-                        .get("price")
-                        .and_then(|v| v.as_s().ok())
-                        .unwrap()
-                        .to_string(),
-                };
-                Ok(GetProductResponse {
-                    status_code: 200,
-                    body: GetProductBody::Product(product),
-                })
-            } else {
-                // Item not found
-                Ok(GetProductResponse {
-                    status_code: 404,
-                    body: GetProductBody::String("Product not found".to_string()),
-                })
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to get item from DynamoDB: {}", e);
-            Ok(GetProductResponse {
-                status_code: 500,
-                body: GetProductBody::String("Failed to retrieve product".to_string()),
-            })
-        }
-    }
+    Ok(client.get_product(id).await?)
 }
 
 #[tokio::main]
@@ -100,12 +31,108 @@ async fn main() -> Result<(), Error> {
 
     // Get config from environment
     let aws_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-    let table_name = "ProductTable";
+
     // Create the DynamoDB client
     let ddb_client = Client::new(&aws_config);
 
     run(service_fn(|request: LambdaEvent<GetProductRequest>| {
-        get_product_handler(&ddb_client, &table_name, request)
+        get_product(&ddb_client, request)
     }))
     .await
+}
+
+#[cfg(test)]
+mod test {
+    use mockall::predicate;
+    use rust_lambda::{
+        model::{GetProductBody, Product},
+        repo::{DynamoDbClient, MockDynamoDbClient},
+    };
+
+    use crate::GetProductResponse;
+
+    #[tokio::test]
+    async fn test_get_product_success() {
+        // Arrange
+        let id = String::from("1");
+        let body = GetProductResponse {
+            status_code: 200,
+            body: GetProductBody::Product(Product {
+                id: "1".to_string(),
+                name: "Test".to_string(),
+                description: "Test".to_string(),
+                price: "9.99".to_string(),
+            }),
+        };
+
+        let mut mock = MockDynamoDbClient::new();
+
+        mock.expect_get_product()
+            .with(predicate::eq(id.clone()))
+            .times(1)
+            .returning(move |_| {
+                Ok(GetProductResponse {
+                    status_code: 200,
+                    body: GetProductBody::Product(Product {
+                        id: "1".to_string(),
+                        name: "Test".to_string(),
+                        description: "Test".to_string(),
+                        price: "9.99".to_string(),
+                    }),
+                })
+            });
+
+        let response = mock.get_product(id).await.unwrap();
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.body, body.body);
+    }
+
+    #[tokio::test]
+    async fn test_get_product_not_found() {
+        // Arrange
+        let id = String::from("999");
+        let body = GetProductResponse {
+            status_code: 404,
+            body: GetProductBody::String("Product not found".to_string()),
+        };
+
+        let mut mock = MockDynamoDbClient::new();
+
+        mock.expect_get_product()
+            .with(predicate::eq(id.clone()))
+            .times(1)
+            .returning(move |_| {
+                Ok(GetProductResponse {
+                    status_code: 404,
+                    body: GetProductBody::String("Product not found".to_string()),
+                })
+            });
+
+        // Act
+        let response = mock.get_product(id).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status_code, 404);
+        assert_eq!(response.body, body.body);
+    }
+
+    #[tokio::test]
+    async fn test_get_product_error() {
+        // Arrange
+        let id = String::from("123");
+        let mut mock = MockDynamoDbClient::new();
+
+        mock.expect_get_product()
+            .with(predicate::eq(id.clone()))
+            .times(1)
+            .returning(move |_| Err("DynamoDB error".into()));
+
+        // Act
+        let result = mock.get_product(id).await;
+
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "DynamoDB error");
+    }
 }
